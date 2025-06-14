@@ -24,6 +24,8 @@ var (
 	kubeletHost = flag.String("kubelet-host", "", "ServerName override for kubelet TLS verification (e.g. peer-pods-worker)")
 	denylistStr = flag.String("denylist", "/pods/exec,/pods/portforward", "Comma-separated list of kubelet API paths to deny")
 	insecure    = flag.Bool("insecure", false, "Allow insecure connections to kubelet (self-signed certs) - use with caution!")
+	useRego     = flag.Bool("rego", false, "Enable Rego policy evaluation instead of simple denylist")
+	regoPath    = flag.String("rego-path", "policy.rego", "Path to Rego policy file")
 )
 
 func main() {
@@ -33,7 +35,15 @@ func main() {
 	log.Printf("MITM proxy starting up...")
 	log.Printf("Listening on: %s", *listenAddr)
 	log.Printf("Forwarding to kubelet at: %s", *kubeletURL)
-	log.Printf("Denylist paths: %v", denylist)
+	if *useRego {
+		// regoPath must be provided if useRego is true
+		if *regoPath == "" {
+			log.Fatal("Rego mode enabled but no rego-path provided. Please specify a path to the Rego policy file.")
+		}
+		log.Printf("Rego mode enabled. Loading policy from: %s", *regoPath)
+	} else {
+		log.Printf("Denylist paths: %v", denylist)
+	}
 
 	log.Println("Loading terminating TLS cert for kube-apiserver connections...")
 	cert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
@@ -60,11 +70,25 @@ func main() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[REQ] %s %s", r.Method, r.URL.Path)
-		for _, denied := range denylist {
-			if strings.HasPrefix(r.URL.Path, denied) {
+		if *useRego {
+			denied, err := evaluatePolicy(*regoPath, r.Method, r.URL.Path)
+			if err != nil {
+				log.Printf("[POLICY ERROR] %v", err)
+				http.Error(w, "Policy evaluation failed", http.StatusInternalServerError)
+				return
+			}
+			if denied {
 				log.Printf("[DENY] Blocked path: %s", r.URL.Path)
 				http.Error(w, "Denied by policy", http.StatusForbidden)
 				return
+			}
+		} else {
+			for _, denied := range denylist {
+				if strings.HasPrefix(r.URL.Path, denied) {
+					log.Printf("[DENY] Blocked path: %s", r.URL.Path)
+					http.Error(w, "Denied by policy", http.StatusForbidden)
+					return
+				}
 			}
 		}
 		forwardRequest(w, r)

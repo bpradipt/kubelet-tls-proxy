@@ -13,7 +13,7 @@ all: build
 
 .PHONY: build
 build:
-	go build -o $(PROXY_BIN) main.go
+	go build -o $(PROXY_BIN) main.go rego_evaluate.go
 	go build -o $(KUBELET_BIN) $(TEST_DIR)/kubelet/mock_kubelet.go
 	go build -o $(CLIENT_BIN) $(TEST_DIR)/client/test_client.go
 
