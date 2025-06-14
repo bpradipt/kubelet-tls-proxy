@@ -14,8 +14,8 @@ all: build
 .PHONY: build
 build:
 	go build -o $(PROXY_BIN) main.go
-	go build -o $(KUBELET_BIN) mock_kubelet.go
-	go build -o $(CLIENT_BIN) $(TEST_DIR)/test_client.go
+	go build -o $(KUBELET_BIN) $(TEST_DIR)/kubelet/mock_kubelet.go
+	go build -o $(CLIENT_BIN) $(TEST_DIR)/client/test_client.go
 
 .PHONY: certs
 certs:

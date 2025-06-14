@@ -1,4 +1,4 @@
-package main
+package kubelet
 
 import (
 	"crypto/tls"
