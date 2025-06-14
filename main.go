@@ -91,6 +91,14 @@ func main() {
 				}
 			}
 		}
+
+		// Websocket or SPDY upgrade handling for exec, attach
+		if isUpgradeRequest(r) {
+			log.Printf("[WS] Detected connection upgrade request for %s", r.URL.Path)
+			handleStreamTunnel(w, r)
+			return
+		}
+
 		forwardRequest(w, r)
 	})
 
@@ -181,4 +189,104 @@ func forwardRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
+}
+
+func isUpgradeRequest(r *http.Request) bool {
+
+	log.Printf("[DEBUG] Connection header: %q, Upgrade header: %q", r.Header.Get("Connection"), r.Header.Get("Upgrade"))
+
+	connectionHeader := strings.ToLower(r.Header.Get("Connection"))
+	upgradeHeader := strings.ToLower(r.Header.Get("Upgrade"))
+
+	// connectionHeader might be: "Upgrade, X-Stream-Protocol-Version"
+	for _, h := range strings.Split(connectionHeader, ",") {
+		if strings.TrimSpace(h) == "upgrade" && upgradeHeader != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func handleStreamTunnel(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[TUNNEL] Initiating upgraded stream: %s %s", r.Method, r.URL.Path)
+
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
+		return
+	}
+	clientConn, clientBufRW, err := hj.Hijack()
+	if err != nil {
+		log.Printf("[TUNNEL ERROR] Client hijack failed: %v", err)
+		return
+	}
+	defer clientConn.Close()
+
+	// Load kubelet TLS config
+	clientCerts, err := tls.LoadX509KeyPair(*clientCert, *clientKey)
+	if err != nil {
+		log.Printf("[TUNNEL ERROR] Load client cert: %v", err)
+		return
+	}
+	caCert, err := os.ReadFile(*caFile)
+	if err != nil {
+		log.Printf("[TUNNEL ERROR] Load CA: %v", err)
+		return
+	}
+	caPool := x509.NewCertPool()
+	caPool.AppendCertsFromPEM(caCert)
+
+	upstreamURL, _ := url.Parse(*kubeletURL)
+	addr := upstreamURL.Host
+	if !strings.Contains(addr, ":") {
+		addr += ":443"
+	}
+	serverName := *kubeletHost
+	if serverName == "" {
+		serverName = upstreamURL.Hostname()
+	}
+
+	kubeletConn, err := tls.Dial("tcp", addr, &tls.Config{
+		RootCAs:            caPool,
+		Certificates:       []tls.Certificate{clientCerts},
+		ServerName:         serverName,
+		InsecureSkipVerify: *insecure,
+		MinVersion:         tls.VersionTLS12,
+	})
+	if err != nil {
+		log.Printf("[TUNNEL ERROR] TLS to kubelet failed: %v", err)
+		return
+	}
+	defer kubeletConn.Close()
+
+	// Forward the upgrade request to kubelet
+	if err := r.Write(kubeletConn); err != nil {
+		log.Printf("[TUNNEL ERROR] Write to kubelet failed: %v", err)
+		return
+	}
+
+	// Stream data in both directions
+	log.Println("[TUNNEL] Bi-directional stream started")
+	done := make(chan struct{}, 2)
+
+	go func() {
+		_, err := io.Copy(kubeletConn, clientBufRW)
+		if err != nil {
+			log.Printf("[TUNNEL ERROR] client → kubelet: %v", err)
+		}
+		kubeletConn.CloseWrite()
+		done <- struct{}{}
+	}()
+
+	go func() {
+		_, err := io.Copy(clientConn, kubeletConn)
+		if err != nil {
+			log.Printf("[TUNNEL ERROR] kubelet → client: %v", err)
+		}
+		clientConn.Close()
+		done <- struct{}{}
+	}()
+
+	<-done
+	log.Println("[TUNNEL] Stream closed")
 }
