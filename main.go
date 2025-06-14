@@ -14,40 +14,37 @@ import (
 )
 
 var (
-	certFile    = flag.String("cert", "", "Path to TLS certificate")
-	keyFile     = flag.String("key", "", "Path to TLS key")
-	clientCert  = flag.String("client-cert", "", "Path to client certificate for kubelet connection")
-	clientKey   = flag.String("client-key", "", "Path to client key for kubelet connection")
-	caFile      = flag.String("ca", "", "Path to CA certificate")
-	listenAddr  = flag.String("listen", ":10442", "Address to listen on")
-	kubeletURL  = flag.String("kubelet-url", "https://localhost:10443", "URL of the real kubelet")
-	denylistStr = flag.String("denylist", "/pods/exec,/pods/portforward", "Comma-separated list of denied paths")
+	certFile    = flag.String("cert", "", "TLS cert to terminate kube-apiserver connection")
+	keyFile     = flag.String("key", "", "TLS key to terminate kube-apiserver connection")
+	clientCert  = flag.String("client-cert", "", "Client cert to talk to kubelet")
+	clientKey   = flag.String("client-key", "", "Client key to talk to kubelet")
+	caFile      = flag.String("ca", "", "CA cert to trust kubelet")
+	listenAddr  = flag.String("listen", "<IP-address>:10250", "MITM proxy listen address (e.g., 172.18.0.3:10250)")
+	kubeletURL  = flag.String("kubelet-url", "https://localhost:10250", "Upstream kubelet URL")
+	kubeletHost = flag.String("kubelet-host", "", "ServerName override for kubelet TLS verification (e.g. peer-pods-worker)")
+	denylistStr = flag.String("denylist", "/pods/exec,/pods/portforward", "Comma-separated list of kubelet API paths to deny")
+	insecure    = flag.Bool("insecure", false, "Allow insecure connections to kubelet (self-signed certs) - use with caution!")
 )
 
 func main() {
 	flag.Parse()
 
 	denylist := strings.Split(*denylistStr, ",")
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Received request: %s %s", r.Method, r.URL.Path)
-		for _, denied := range denylist {
-			if strings.HasPrefix(r.URL.Path, denied) {
-				http.Error(w, "Denied by MITM proxy policy", http.StatusForbidden)
-				return
-			}
-		}
+	log.Printf("MITM proxy starting up...")
+	log.Printf("Listening on: %s", *listenAddr)
+	log.Printf("Forwarding to kubelet at: %s", *kubeletURL)
+	log.Printf("Denylist paths: %v", denylist)
 
-		forwardRequest(w, r)
-	})
-
+	log.Println("Loading terminating TLS cert for kube-apiserver connections...")
 	cert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
 	if err != nil {
-		log.Fatalf("Failed to load TLS cert/key: %v", err)
+		log.Fatalf("Error loading proxy cert/key: %v", err)
 	}
 
+	log.Println("Reading CA certificate for incoming client verification...")
 	caCert, err := os.ReadFile(*caFile)
 	if err != nil {
-		log.Fatalf("Failed to read CA file: %v", err)
+		log.Fatalf("Error reading CA file: %v", err)
 	}
 	caPool := x509.NewCertPool()
 	if !caPool.AppendCertsFromPEM(caCert) {
@@ -58,63 +55,101 @@ func main() {
 		Certificates: []tls.Certificate{cert},
 		ClientCAs:    caPool,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS12,
 	}
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("[REQ] %s %s", r.Method, r.URL.Path)
+		for _, denied := range denylist {
+			if strings.HasPrefix(r.URL.Path, denied) {
+				log.Printf("[DENY] Blocked path: %s", r.URL.Path)
+				http.Error(w, "Denied by policy", http.StatusForbidden)
+				return
+			}
+		}
+		forwardRequest(w, r)
+	})
 
 	server := &http.Server{
 		Addr:      *listenAddr,
 		TLSConfig: tlsConfig,
 	}
-
-	log.Printf("MITM proxy listening on %s", *listenAddr)
+	log.Printf("Starting MITM proxy server on %s", *listenAddr)
 	log.Fatal(server.ListenAndServeTLS("", ""))
 }
 
 func forwardRequest(w http.ResponseWriter, r *http.Request) {
-	caCert, _ := os.ReadFile(*caFile)
-	caPool := x509.NewCertPool()
-	caPool.AppendCertsFromPEM(caCert)
+	log.Println("Preparing to forward request to kubelet...")
 
-	cert, err := tls.LoadX509KeyPair(*clientCert, *clientKey)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Failed to load client certificate", http.StatusInternalServerError)
-		return
-	}
-
-	u, _ := url.Parse(*kubeletURL)
-	tlsConfig := &tls.Config{
-		RootCAs:      caPool,
-		Certificates: []tls.Certificate{cert},
-		ServerName:   u.Hostname(),
-	}
-
-	transport := &http.Transport{TLSClientConfig: tlsConfig}
-	client := &http.Client{Transport: transport}
-
-	// Copy request to new request
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read body", http.StatusInternalServerError)
+		log.Printf("Error reading request body: %v", err)
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
 		return
 	}
 	defer r.Body.Close()
 
-	u.Path = r.URL.Path
-	u.RawQuery = r.URL.RawQuery
-
-	req, err := http.NewRequest(r.Method, u.String(), strings.NewReader(string(bodyBytes)))
+	log.Println("Loading client certificate for upstream connection to kubelet...")
+	clientCerts, err := tls.LoadX509KeyPair(*clientCert, *clientKey)
 	if err != nil {
-		http.Error(w, "Failed to create forward request", http.StatusInternalServerError)
+		log.Printf("Client cert error: %v", err)
+		http.Error(w, "Failed to load client cert/key", http.StatusInternalServerError)
+		return
+	}
+
+	log.Println("Reading CA cert for kubelet server validation...")
+	caCert, err := os.ReadFile(*caFile)
+	if err != nil {
+		log.Printf("Error reading CA cert: %v", err)
+		http.Error(w, "Failed to read CA cert", http.StatusInternalServerError)
+		return
+	}
+	caPool := x509.NewCertPool()
+	caPool.AppendCertsFromPEM(caCert)
+
+	upstreamURL, err := url.Parse(*kubeletURL)
+	if err != nil {
+		log.Printf("Invalid kubelet URL: %v", err)
+		http.Error(w, "Invalid kubelet URL", http.StatusInternalServerError)
+		return
+	}
+	serverName := *kubeletHost
+	if serverName == "" {
+		serverName = upstreamURL.Hostname()
+	}
+	log.Printf("Connecting to kubelet with ServerName override: %s", serverName)
+
+	clientTLS := &tls.Config{
+		RootCAs:            caPool,
+		Certificates:       []tls.Certificate{clientCerts},
+		ServerName:         serverName,
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: *insecure, // Allow self-signed certs for kubelet
+	}
+
+	transport := &http.Transport{TLSClientConfig: clientTLS}
+	client := &http.Client{Transport: transport}
+
+	upstreamURL.Path = r.URL.Path
+	upstreamURL.RawQuery = r.URL.RawQuery
+	log.Printf("Forwarding request to: %s", upstreamURL.String())
+
+	req, err := http.NewRequest(r.Method, upstreamURL.String(), strings.NewReader(string(body)))
+	if err != nil {
+		log.Printf("Failed to create upstream request: %v", err)
+		http.Error(w, "Failed to create upstream request", http.StatusInternalServerError)
 		return
 	}
 	req.Header = r.Header.Clone()
 
 	resp, err := client.Do(req)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Upstream request failed: %v", err), http.StatusBadGateway)
+		log.Printf("Upstream kubelet error: %v", err)
+		http.Error(w, fmt.Sprintf("Upstream kubelet error: %v", err), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
-
+	log.Printf("Received response from kubelet: %s", resp.Status)
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
