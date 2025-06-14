@@ -5,12 +5,15 @@ import rego.v1
 # Deny requests that match these criteria
 deny if {
   input.method == "POST"
-  startswith(input.path, "/exec")
-  reason := "POST to /exec is not allowed"
+  startswith(input.path, "/exec")  
 }
 
 deny if {
   input.method == "POST"
-  startswith(input.path, "/portforward")
-  reason := "POST to /portforward is not allowed"
+  startswith(input.path, "/portForward")  
+}
+
+deny if {
+  input.method == "POST"
+  startswith(input.path, "/attach") 
 }
