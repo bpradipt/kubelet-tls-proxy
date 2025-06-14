@@ -1,5 +1,5 @@
 # Binary names
-PROXY_BIN := mitm_proxy
+PROXY_BIN := tls_proxy
 KUBELET_BIN := mock_kubelet
 CLIENT_BIN := test_client
 
