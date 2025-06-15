@@ -12,8 +12,8 @@ import (
 )
 
 func main() {
-	certFile := flag.String("cert", "mitm.crt", "Path to TLS certificate file")
-	keyFile := flag.String("key", "mitm.key", "Path to TLS key file")
+	certFile := flag.String("cert", "tls.crt", "Path to TLS certificate file")
+	keyFile := flag.String("key", "tls.key", "Path to TLS key file")
 	caFile := flag.String("ca", "ca.crt", "Path to CA certificate for verifying clients")
 	listenAddr := flag.String("listen", ":10443", "Address to listen on")
 	flag.Parse()

@@ -16,7 +16,7 @@ var (
 	certFile  = flag.String("cert", "", "Path to client TLS cert")
 	keyFile   = flag.String("key", "", "Path to client TLS key")
 	caFile    = flag.String("ca", "", "Path to CA certificate")
-	targetURL = flag.String("url", "https://localhost:10442", "Target URL of MITM proxy")
+	targetURL = flag.String("url", "https://localhost:10442", "Target URL of Kubelet TLS proxy")
 )
 
 func makeRequest(method, path, body string) {

@@ -24,8 +24,8 @@ certs:
 .PHONY: run-proxy
 run-proxy:
 	./$(PROXY_BIN) \
-		--cert $(CERT_DIR)/mitm.crt \
-		--key $(CERT_DIR)/mitm.key \
+		--cert $(CERT_DIR)/tls.crt \
+		--key $(CERT_DIR)/tls.key \
 		--client-cert $(CERT_DIR)/client.crt \
 		--client-key $(CERT_DIR)/client.key \
 		--ca $(CERT_DIR)/ca.crt \
@@ -35,8 +35,8 @@ run-proxy:
 .PHONY: run-mock
 run-mock:
 	./$(KUBELET_BIN) \
-		--cert $(CERT_DIR)/mitm.crt \
-		--key $(CERT_DIR)/mitm.key \
+		--cert $(CERT_DIR)/tls.crt \
+		--key $(CERT_DIR)/tls.key \
 		--ca $(CERT_DIR)/ca.crt \
 		--listen :10443 & echo $$! > kubelet.pid
 

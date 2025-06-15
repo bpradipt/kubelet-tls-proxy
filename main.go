@@ -19,7 +19,7 @@ var (
 	clientCert  = flag.String("client-cert", "", "Client cert to talk to kubelet")
 	clientKey   = flag.String("client-key", "", "Client key to talk to kubelet")
 	caFile      = flag.String("ca", "", "CA cert to trust kubelet")
-	listenAddr  = flag.String("listen", "<IP-address>:10250", "MITM proxy listen address (e.g., 172.18.0.3:10250)")
+	listenAddr  = flag.String("listen", "<IP-address>:10250", "Kubelet TLS proxy listen address (e.g., 172.18.0.3:10250)")
 	kubeletURL  = flag.String("kubelet-url", "https://localhost:10250", "Upstream kubelet URL")
 	kubeletHost = flag.String("kubelet-host", "", "ServerName override for kubelet TLS verification (e.g. peer-pods-worker)")
 	denylistStr = flag.String("denylist", "/pods/exec,/pods/portforward", "Comma-separated list of kubelet API paths to deny")
@@ -32,7 +32,7 @@ func main() {
 	flag.Parse()
 
 	denylist := strings.Split(*denylistStr, ",")
-	log.Printf("MITM proxy starting up...")
+	log.Printf("Kubelet TLS proxy starting up...")
 	log.Printf("Listening on: %s", *listenAddr)
 	log.Printf("Forwarding to kubelet at: %s", *kubeletURL)
 	if *useRego {
@@ -106,7 +106,7 @@ func main() {
 		Addr:      *listenAddr,
 		TLSConfig: tlsConfig,
 	}
-	log.Printf("Starting MITM proxy server on %s", *listenAddr)
+	log.Printf("Starting Kubelet TLS proxy server on %s", *listenAddr)
 	log.Fatal(server.ListenAndServeTLS("", ""))
 }
 

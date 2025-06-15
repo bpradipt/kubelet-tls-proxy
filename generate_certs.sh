@@ -16,10 +16,10 @@ openssl genrsa -out "$CERT_DIR/ca.key" 2048
 openssl req -x509 -new -nodes -key "$CERT_DIR/ca.key" -sha256 -days 365 -out "$CERT_DIR/ca.crt" -subj "/CN=test-ca"
 
 # kubelet server cert (used by proxy to impersonate kubelet)
-openssl genrsa -out "$CERT_DIR/mitm.key" 2048
-openssl req -new -key "$CERT_DIR/mitm.key" -out "$CERT_DIR/mitm.csr" -subj "/CN=localhost"
-openssl x509 -req -in "$CERT_DIR/mitm.csr" -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" -CAcreateserial \
-  -out "$CERT_DIR/mitm.crt" -days 365 -sha256 \
+openssl genrsa -out "$CERT_DIR/tls.key" 2048
+openssl req -new -key "$CERT_DIR/tls.key" -out "$CERT_DIR/tls.csr" -subj "/CN=localhost"
+openssl x509 -req -in "$CERT_DIR/tls.csr" -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" -CAcreateserial \
+  -out "$CERT_DIR/tls.crt" -days 365 -sha256 \
   -extfile <(printf "subjectAltName=DNS:localhost")
 
 # client cert (used by proxy to connect to kubelet)
